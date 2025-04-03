@@ -1,0 +1,53 @@
+import ccxt import numpy as np import pandas as pd import talib import requests import json import time import tensorflow as tf from tensorflow import keras from tensorflow.keras.models import Sequential from tensorflow.keras.layers import LSTM, Dense, Dropout from datetime import datetime
+
+Load API Keys from Config
+
+with open('config.json') as config_file: config = json.load(config_file)
+
+API_KEY = config['api_key'] API_SECRET = config['api_secret'] EXCHANGE_NAME = config['exchange'] TRADE_SYMBOL = config['symbol'] TRADE_AMOUNT = config['amount']
+
+Initialize Exchange
+
+exchange = getattr(ccxt, EXCHANGE_NAME)({ 'apiKey': API_KEY, 'secret': API_SECRET, 'enableRateLimit': True, })
+
+Load Market Data
+
+def fetch_data(): candles = exchange.fetch_ohlcv(TRADE_SYMBOL, timeframe='1m', limit=100) df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']) df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms') return df
+
+AI Model Training
+
+def train_ai_model(): df = fetch_data() df['rsi'] = talib.RSI(df['close'], timeperiod=14) df['macd'], df['macd_signal'], _ = talib.MACD(df['close']) df = df.dropna()
+
+X = df[['rsi', 'macd', 'macd_signal']].values
+y = np.where(df['close'].shift(-1) > df['close'], 1, 0)
+
+X_train, y_train = X[:80], y[:80]
+X_test, y_test = X[80:], y[80:]
+
+model = Sequential([
+    LSTM(50, return_sequences=True, input_shape=(X_train.shape[1], 1)),
+    Dropout(0.2),
+    LSTM(50),
+    Dropout(0.2),
+    Dense(1, activation='sigmoid')
+])
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+model.fit(X_train, y_train, epochs=10, batch_size=8)
+return model
+
+ai_model = train_ai_model()
+
+def predict_trade(): df = fetch_data() rsi = talib.RSI(df['close'], timeperiod=14)[-1] macd, macd_signal, _ = talib.MACD(df['close'])
+
+X_pred = np.array([[rsi, macd[-1], macd_signal[-1]]])
+prediction = ai_model.predict(X_pred)
+return prediction[0][0] > 0.5
+
+Execute Trade
+
+def execute_trade(): if predict_trade(): order = exchange.create_market_buy_order(TRADE_SYMBOL, TRADE_AMOUNT) print(f"BUY Order Executed: {order}") else: order = exchange.create_market_sell_order(TRADE_SYMBOL, TRADE_AMOUNT) print(f"SELL Order Executed: {order}")
+
+Main Trading Loop
+
+while True: try: execute_trade() time.sleep(60)  # 1-minute interval except Exception as e: print(f"Error: {e}") time.sleep(10)
+
